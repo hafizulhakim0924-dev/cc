@@ -122,7 +122,7 @@ if($page == 'login'){
             if($role == 'user'){
                 header("Location:?page=lomba");
             } else {
-                header("Location:?page=home");
+            header("Location:?page=home");
             }
             exit;
         } else {
@@ -208,7 +208,7 @@ if($page == 'login'){
     </head>
     <body>
         <div class="container">
-            <h2>Padang Creative Center</h2>
+    <h2>Padang Creative Center</h2>
             <?php if(isset($error)): ?>
                 <p class="error"><?= $error ?></p>
             <?php endif; ?>
@@ -219,14 +219,14 @@ if($page == 'login'){
                     </span>
                 </div>
             <?php endif; ?>
-            <form method="post">
+    <form method="post">
                 <input type="hidden" name="role" value="<?= $selected_role ?>">
-                Username<br>
+        Username<br>
                 <input type="text" name="username" required><br><br>
-                Password<br>
-                <input type="password" name="password" required><br><br>
-                <button name="login">Login</button>
-            </form>
+        Password<br>
+        <input type="password" name="password" required><br><br>
+        <button name="login">Login</button>
+    </form>
             <div class="back-link">
                 <a href="?page=welcome">← Kembali pilih role</a>
             </div>
@@ -350,6 +350,9 @@ if($page == 'lomba'){
             .lomba-card.ipa {
                 background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             }
+            .lomba-card.ips {
+                background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+            }
             .lomba-card.mtk {
                 background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
             }
@@ -381,6 +384,7 @@ if($page == 'lomba'){
     <?php
     $lomba = [
         "IPA"=>["SD","SMP","SMA"],
+        "IPS"=>["SD","SMP","SMA"],
         "MTK"=>["SD","SMP","SMA"],
         "Fisika"=>["SMP","SMA"],
         "Robotik"=>["SD","SMP","SMA"],
@@ -472,30 +476,98 @@ if($page == 'soal'){
     }
 
     if(isset($_POST['submit'])){
+        // Cek ulang apakah user sudah mengerjakan
+        $cek_ulang = $conn->query("
+            SELECT 1 FROM jawaban
+            WHERE user_id={$user['id']} AND soal_id IN (
+                SELECT id FROM soal WHERE kategori='$kategori' AND tingkat='$tingkat'
+            )
+            LIMIT 1
+        ");
+        
+        if($cek_ulang->num_rows > 0){
+            header("Location:?page=soal&kategori=$kategori&tingkat=$tingkat");
+            exit;
+        }
+        
         $nilai = 0;
         $total_soal = 0;
+        $errors = [];
 
+        // Validasi semua jawaban ada
+        $q_soal = $conn->query("
+            SELECT id, jawaban FROM soal
+            WHERE kategori='$kategori' AND tingkat='$tingkat'
+        ");
+        
+        $soal_ids = [];
+        while($s = $q_soal->fetch_assoc()){
+            $soal_ids[] = $s['id'];
+        }
+        
+        // Mulai transaksi
+        $conn->begin_transaction();
+        
+        try {
         foreach($_POST['jawaban'] as $soal_id=>$jawab){
-            $total_soal++;
+                $soal_id = (int)$soal_id;
+                
+                // Validasi soal_id ada dalam daftar
+                if(!in_array($soal_id, $soal_ids)){
+                    continue;
+                }
+                
+                $total_soal++;
+                
+                // Ambil kunci jawaban
             $q = $conn->query("SELECT jawaban FROM soal WHERE id=$soal_id");
+                if(!$q || $q->num_rows == 0){
+                    continue;
+                }
+                
             $kunci = $q->fetch_assoc()['jawaban'];
-            $benar = ($jawab == $kunci) ? 1 : 0;
+                $benar = (strtolower(trim($jawab)) == strtolower(trim($kunci))) ? 1 : 0;
             if($benar) $nilai++;
 
-            $jawab_esc = esc($jawab);
-            $conn->query("
-                INSERT IGNORE INTO jawaban(user_id,soal_id,jawaban,benar)
-                VALUES({$user['id']},$soal_id,'$jawab_esc',$benar)
-            ");
-        }
+                // Insert jawaban
+                $jawab_esc = esc($jawab);
+                $insert = $conn->query("
+                    INSERT INTO jawaban(user_id,soal_id,jawaban,benar)
+                    VALUES({$user['id']},$soal_id,'$jawab_esc',$benar)
+                    ON DUPLICATE KEY UPDATE jawaban='$jawab_esc', benar=$benar
+                ");
+                
+                if(!$insert){
+                    throw new Exception("Error inserting jawaban: " . $conn->error);
+                }
+            }
 
-        $conn->query("
+            // Update rank user
+            $update = $conn->query("
             UPDATE users
             SET rank = rank + $nilai,
                 status_terakhir='Selesai $kategori $tingkat'
             WHERE id={$user['id']}
         ");
 
+            if(!$update){
+                throw new Exception("Error updating rank: " . $conn->error);
+            }
+            
+            // Commit transaksi
+            $conn->commit();
+            
+        } catch (Exception $e) {
+            // Rollback jika ada error
+            $conn->rollback();
+            die("Error: " . $e->getMessage());
+        }
+
+        // Ambil rank terbaru
+        $q_rank = $conn->query("SELECT rank FROM users WHERE id={$user['id']}");
+        $rank_sekarang = $q_rank->fetch_assoc()['rank'];
+        
+        $persentase = $total_soal > 0 ? round(($nilai / $total_soal) * 100, 1) : 0;
         ?>
         <!DOCTYPE html>
         <html>
@@ -504,42 +576,122 @@ if($page == 'soal'){
             <style>
                 body {
                     font-family: Arial, sans-serif;
-                    max-width: 600px;
+                    max-width: 700px;
                     margin: 50px auto;
                     padding: 20px;
-                    background: #f5f5f5;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
                 }
                 .container {
                     background: white;
-                    padding: 30px;
-                    border-radius: 10px;
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                    padding: 40px;
+                    border-radius: 15px;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
                     text-align: center;
                 }
+                .success-icon {
+                    font-size: 80px;
+                    margin-bottom: 20px;
+                }
+                h2 {
+                    color: #333;
+                    margin-bottom: 10px;
+                }
+                .kategori-info {
+                    color: #666;
+                    margin-bottom: 30px;
+                    font-size: 18px;
+                }
+                .score-container {
+                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                    color: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    margin: 30px 0;
+                }
                 .score {
-                    font-size: 48px;
-                    color: #4CAF50;
+                    font-size: 64px;
                     font-weight: bold;
+                    margin: 10px 0;
+                }
+                .score-detail {
+                    font-size: 20px;
+                    margin: 10px 0;
+                }
+                .persentase {
+                    font-size: 24px;
+                    margin-top: 10px;
+                }
+                .rank-info {
+                    background: #f0f8ff;
+                    padding: 20px;
+                    border-radius: 10px;
                     margin: 20px 0;
+                    border-left: 4px solid #2196F3;
+                }
+                .rank-info h3 {
+                    margin: 0 0 10px 0;
+                    color: #2196F3;
+                }
+                .rank-value {
+                    font-size: 32px;
+                    font-weight: bold;
+                    color: #2196F3;
+                }
+                .btn-group {
+                    margin-top: 30px;
+                    display: flex;
+                    gap: 15px;
+                    justify-content: center;
+                    flex-wrap: wrap;
                 }
                 .btn {
                     display: inline-block;
-                    padding: 10px 20px;
+                    padding: 12px 30px;
                     background: #2196F3;
                     color: white;
                     text-decoration: none;
-                    border-radius: 5px;
-                    margin-top: 10px;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    transition: all 0.3s;
+                }
+                .btn:hover {
+                    background: #0b7dda;
+                    transform: translateY(-2px);
+                    box-shadow: 0 5px 15px rgba(33, 150, 243, 0.4);
+                }
+                .btn-secondary {
+                    background: #4CAF50;
+                }
+                .btn-secondary:hover {
+                    background: #45a049;
+                    box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
                 }
             </style>
         </head>
         <body>
             <div class="container">
+                <div class="success-icon">✅</div>
                 <h2>Selamat! Anda telah menyelesaikan lomba</h2>
-                <div class="score">Nilai: <?= $nilai ?>/<?= $total_soal ?></div>
-                <p>Rank Anda telah diperbarui!</p>
-                <a href="?page=lomba" class="btn">Kembali ke Pilih Lomba</a>
-                <a href="?page=leaderboard" class="btn">Lihat Leaderboard</a>
+                <div class="kategori-info"><?= $kategori ?> <?= $tingkat ?></div>
+                
+                <div class="score-container">
+                    <div class="score"><?= $nilai ?>/<?= $total_soal ?></div>
+                    <div class="score-detail">Jawaban Benar</div>
+                    <div class="persentase"><?= $persentase ?>%</div>
+                </div>
+                
+                <div class="rank-info">
+                    <h3>Rank Anda Sekarang</h3>
+                    <div class="rank-value"><?= $rank_sekarang ?></div>
+                    <p style="margin: 10px 0 0 0; color: #666;">Rank Anda telah diperbarui!</p>
+                </div>
+                
+                <div class="btn-group">
+                    <a href="?page=lomba" class="btn">Kembali ke Pilih Lomba</a>
+                    <a href="?page=leaderboard" class="btn btn-secondary">Lihat Leaderboard</a>
+                    <a href="?page=home" class="btn">Dashboard</a>
+                </div>
             </div>
         </body>
         </html>
@@ -734,17 +886,179 @@ if($page == 'soal'){
 
 /* ================= LEADERBOARD ================= */
 if($page == 'leaderboard'){
-    nav();
-    echo "<h3>Leaderboard</h3>";
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Leaderboard - Padang Creative Center</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1000px;
+                margin: 20px auto;
+                padding: 20px;
+                background: #f5f5f5;
+            }
+            .header {
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }
+            .header h2 {
+                margin: 0;
+                color: #333;
+            }
+            .nav {
+                background: white;
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }
+            .nav a {
+                margin-right: 15px;
+                text-decoration: none;
+                color: #2196F3;
+            }
+            .nav a:hover {
+                text-decoration: underline;
+            }
+            .leaderboard-container {
+                background: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .leaderboard-container h3 {
+                margin-top: 0;
+                color: #333;
+                text-align: center;
+                font-size: 28px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }
+            th {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 15px;
+                text-align: left;
+                font-weight: bold;
+            }
+            td {
+                padding: 12px 15px;
+                border-bottom: 1px solid #eee;
+            }
+            tr:hover {
+                background: #f9f9f9;
+            }
+            .rank-badge {
+                display: inline-block;
+                width: 40px;
+                height: 40px;
+                line-height: 40px;
+                text-align: center;
+                border-radius: 50%;
+                font-weight: bold;
+                color: white;
+            }
+            .rank-1 {
+                background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+            }
+            .rank-2 {
+                background: linear-gradient(135deg, #C0C0C0 0%, #808080 100%);
+            }
+            .rank-3 {
+                background: linear-gradient(135deg, #CD7F32 0%, #8B4513 100%);
+            }
+            .rank-other {
+                background: #2196F3;
+            }
+            .score {
+                font-weight: bold;
+                color: #4CAF50;
+                font-size: 18px;
+            }
+            .user-name {
+                font-weight: bold;
+                color: #333;
+            }
+            .user-school {
+                color: #666;
+                font-size: 14px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>Padang Creative Center</h2>
+        </div>
+        <div class="nav">
+            <a href='?page=home'>Home</a>
+            <a href='?page=lomba'>Ikuti Lomba</a>
+            <a href='?page=leaderboard'>Leaderboard</a>
+            <a href='?page=logout'>Logout</a>
+        </div>
+        <div class="leaderboard-container">
+            <h3>🏆 Leaderboard 🏆</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Nama</th>
+                        <th>Sekolah</th>
+                        <th>Skor</th>
+                    </tr>
+                </thead>
+                <tbody>
+    <?php
     $q = $conn->query("
         SELECT nama,sekolah,rank
         FROM users
         WHERE role='user'
         ORDER BY rank DESC
+        LIMIT 100
     ");
+    
+    $rank = 1;
     while($r = $q->fetch_assoc()){
-        echo "{$r['nama']} - {$r['sekolah']} - Rank {$r['rank']}<br>";
+        $rank_class = 'rank-other';
+        if($rank == 1) $rank_class = 'rank-1';
+        elseif($rank == 2) $rank_class = 'rank-2';
+        elseif($rank == 3) $rank_class = 'rank-3';
+        
+        echo "<tr>
+                <td>
+                    <span class='rank-badge $rank_class'>$rank</span>
+                </td>
+                <td>
+                    <div class='user-name'>{$r['nama']}</div>
+                </td>
+                <td>
+                    <div class='user-school'>{$r['sekolah']}</div>
+                </td>
+                <td>
+                    <span class='score'>{$r['rank']}</span>
+                </td>
+              </tr>";
+        $rank++;
     }
+    
+    if($rank == 1){
+        echo "<tr><td colspan='4' style='text-align:center; padding:30px; color:#999;'>Belum ada data leaderboard</td></tr>";
+    }
+    ?>
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
 }
 
 /* ================= ADMIN ================= */
